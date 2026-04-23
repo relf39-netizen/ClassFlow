@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build . --config ./vite.config.js",
+    "build": "node build.js",
     "start": "node --experimental-strip-types server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist",
