@@ -2,8 +2,11 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import Database from 'better-sqlite3';
+import mysql from 'mysql2/promise';
 import cors from 'cors';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -15,117 +18,185 @@ async function startServer() {
   app.use(cors());
   app.use(express.json());
 
-  // Initialize SQLite Database
-  const db = new Database('scheduler.db');
-  db.pragma('journal_mode = WAL');
+  // Initialize MySQL Connection Pool
+  const pool = mysql.createPool({
+    host: process.env.DB_HOST || 'localhost',
+    user: process.env.DB_USER || 'root',
+    password: process.env.DB_PASSWORD || '',
+    database: process.env.DB_NAME || 'school_scheduler',
+    port: parseInt(process.env.DB_PORT || '3306'),
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0
+  });
 
   // Database Schema Setup
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS settings (
-      id TEXT PRIMARY KEY,
-      value TEXT
-    );
-    
-    CREATE TABLE IF NOT EXISTS teachers (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      color TEXT
-    );
-    
-    CREATE TABLE IF NOT EXISTS subjects (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      type TEXT, -- main, activity
-      periods_per_week INTEGER DEFAULT 1
-    );
-    
-    CREATE TABLE IF NOT EXISTS rooms (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      type TEXT -- main, lab, etc
-    );
-    
-    CREATE TABLE IF NOT EXISTS groups (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL
-    );
-    
-    CREATE TABLE IF NOT EXISTS assignments (
-      id TEXT PRIMARY KEY,
-      group_id TEXT,
-      subject_id TEXT,
-      teacher_id TEXT,
-      room_id TEXT,
-      backup_room_id TEXT,
-      periods_per_week INTEGER,
-      FOREIGN KEY(group_id) REFERENCES groups(id),
-      FOREIGN KEY(subject_id) REFERENCES subjects(id),
-      FOREIGN KEY(teacher_id) REFERENCES teachers(id),
-      FOREIGN KEY(room_id) REFERENCES rooms(id),
-      FOREIGN KEY(backup_room_id) REFERENCES rooms(id)
-    );
-    
-    CREATE TABLE IF NOT EXISTS schedules (
-      id TEXT PRIMARY KEY,
-      data TEXT NOT NULL,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
+  const setupSchema = async () => {
+    try {
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS settings (
+          id VARCHAR(255) PRIMARY KEY,
+          value TEXT
+        )
+      `);
+      
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS teachers (
+          id VARCHAR(255) PRIMARY KEY,
+          name VARCHAR(255) NOT NULL,
+          color VARCHAR(50)
+        )
+      `);
+      
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS subjects (
+          id VARCHAR(255) PRIMARY KEY,
+          name VARCHAR(255) NOT NULL,
+          type VARCHAR(50),
+          periods_per_week INT DEFAULT 1
+        )
+      `);
+      
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS rooms (
+          id VARCHAR(255) PRIMARY KEY,
+          name VARCHAR(255) NOT NULL,
+          type VARCHAR(50)
+        )
+      `);
+      
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS groups_table (
+          id VARCHAR(255) PRIMARY KEY,
+          name VARCHAR(255) NOT NULL
+        )
+      `);
+      
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS assignments (
+          id VARCHAR(255) PRIMARY KEY,
+          group_id VARCHAR(255),
+          subject_id VARCHAR(255),
+          teacher_id VARCHAR(255),
+          room_id VARCHAR(255),
+          backup_room_id VARCHAR(255),
+          periods_per_week INT,
+          FOREIGN KEY(group_id) REFERENCES groups_table(id),
+          FOREIGN KEY(subject_id) REFERENCES subjects(id),
+          FOREIGN KEY(teacher_id) REFERENCES teachers(id),
+          FOREIGN KEY(room_id) REFERENCES rooms(id),
+          FOREIGN KEY(backup_room_id) REFERENCES rooms(id)
+        )
+      `);
+      
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS schedules (
+          id VARCHAR(255) PRIMARY KEY,
+          data LONGTEXT NOT NULL,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      console.log('Database schema verified');
+    } catch (err) {
+      console.error('Error creating schema:', err);
+    }
+  };
+
+  await setupSchema();
 
   // --- API Routes ---
   
   // Generic CRUD for common entities
   const entities = ['teachers', 'subjects', 'rooms', 'groups', 'assignments'];
   entities.forEach(entity => {
-    app.get(`/api/${entity}`, (req, res) => {
-      const data = db.prepare(`SELECT * FROM ${entity}`).all();
-      res.json(data);
-    });
+    const tableName = entity === 'groups' ? 'groups_table' : entity;
 
-    app.post(`/api/${entity}`, (req, res) => {
-      const fields = Object.keys(req.body);
-      const placeholders = fields.map(() => '?').join(',');
-      const values = Object.values(req.body);
+    app.get(`/api/${entity}`, async (req, res) => {
       try {
-        db.prepare(`INSERT OR REPLACE INTO ${entity} (${fields.join(',')}) VALUES (${placeholders})`).run(...values);
-        res.json({ success: true });
+        const [rows] = await pool.query(`SELECT * FROM ${tableName}`);
+        res.json(rows);
       } catch (e: any) {
         res.status(500).json({ error: e.message });
       }
     });
 
-    app.delete(`/api/${entity}/:id`, (req, res) => {
-      db.prepare(`DELETE FROM ${entity} WHERE id = ?`).run(req.params.id);
-      res.json({ success: true });
+    app.post(`/api/${entity}`, async (req, res) => {
+      const fields = Object.keys(req.body);
+      const placeholders = fields.map(() => '?').join(',');
+      const values = Object.values(req.body);
+      
+      // Build ON DUPLICATE KEY UPDATE clause
+      const updateClause = fields.map(field => `${field} = VALUES(${field})`).join(',');
+
+      try {
+        await pool.query(
+          `INSERT INTO ${tableName} (${fields.join(',')}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${updateClause}`,
+          values
+        );
+        res.json({ success: true });
+      } catch (e: any) {
+        console.error(`Error saving to ${entity}:`, e);
+        res.status(500).json({ error: e.message });
+      }
+    });
+
+    app.delete(`/api/${entity}/:id`, async (req, res) => {
+      try {
+        await pool.query(`DELETE FROM ${tableName} WHERE id = ?`, [req.params.id]);
+        res.json({ success: true });
+      } catch (e: any) {
+        res.status(500).json({ error: e.message });
+      }
     });
   });
 
   // Settings
-  app.get('/api/settings', (req, res) => {
-    const data = db.prepare('SELECT * FROM settings').all();
-    const settings: Record<string, any> = {};
-    data.forEach((row: any) => settings[row.id] = JSON.parse(row.value));
-    res.json(settings);
+  app.get('/api/settings', async (req, res) => {
+    try {
+      const [rows]: any = await pool.query('SELECT * FROM settings');
+      const settings: Record<string, any> = {};
+      rows.forEach((row: any) => settings[row.id] = JSON.parse(row.value));
+      res.json(settings);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
-  app.post('/api/settings', (req, res) => {
-    const { id, value } = req.body;
-    db.prepare('INSERT OR REPLACE INTO settings (id, value) VALUES (?, ?)').run(id, JSON.stringify(value));
-    res.json({ success: true });
+  app.post('/api/settings', async (req, res) => {
+    try {
+      const { id, value } = req.body;
+      const jsonValue = JSON.stringify(value);
+      await pool.query(
+        'INSERT INTO settings (id, value) VALUES (?, ?) ON DUPLICATE KEY UPDATE value = VALUES(value)',
+        [id, jsonValue]
+      );
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // Schedule persistence
-  app.get('/api/schedule/latest', (req, res) => {
-    const data = db.prepare('SELECT * FROM schedules ORDER BY updated_at DESC LIMIT 1').get() as any;
-    res.json(data ? JSON.parse(data.data) : null);
+  app.get('/api/schedule/latest', async (req, res) => {
+    try {
+      const [rows]: any = await pool.query('SELECT * FROM schedules ORDER BY updated_at DESC LIMIT 1');
+      const data = rows[0];
+      res.json(data ? JSON.parse(data.data) : null);
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
-  app.post('/api/schedule', (req, res) => {
-    db.prepare('INSERT INTO schedules (id, data) VALUES (?, ?)').run(
-      Date.now().toString(),
-      JSON.stringify(req.body)
-    );
-    res.json({ success: true });
+  app.post('/api/schedule', async (req, res) => {
+    try {
+      await pool.query('INSERT INTO schedules (id, data) VALUES (?, ?)', [
+        Date.now().toString(),
+        JSON.stringify(req.body)
+      ]);
+      res.json({ success: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // Vite middleware for development
