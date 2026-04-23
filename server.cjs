@@ -1,19 +1,14 @@
-import express from 'express';
-import { createServer as createViteServer } from 'vite';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import mysql from 'mysql2/promise';
-import cors from 'cors';
-import dotenv from 'dotenv';
+const express = require('express');
+const path = require('path');
+const mysql = require('mysql2/promise');
+const cors = require('cors');
+const dotenv = require('dotenv');
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = process.env.PORT || 3000;
 
   app.use(cors());
   app.use(express.json());
@@ -106,7 +101,6 @@ async function startServer() {
 
   // --- API Routes ---
   
-  // Generic CRUD for common entities
   const entities = ['teachers', 'subjects', 'rooms', 'groups', 'assignments'];
   entities.forEach(entity => {
     const tableName = entity === 'groups' ? 'groups_table' : entity;
@@ -115,7 +109,7 @@ async function startServer() {
       try {
         const [rows] = await pool.query(`SELECT * FROM ${tableName}`);
         res.json(rows);
-      } catch (e: any) {
+      } catch (e) {
         res.status(500).json({ error: e.message });
       }
     });
@@ -125,16 +119,15 @@ async function startServer() {
       const placeholders = fields.map(() => '?').join(',');
       const values = Object.values(req.body);
       
-      // Build ON DUPLICATE KEY UPDATE clause
-      const updateClause = fields.map(field => `${field} = VALUES(${field})`).join(',');
+      const updateClause = fields.map(field => `\`${field}\` = VALUES(\`${field}\`)`).join(',');
 
       try {
         await pool.query(
-          `INSERT INTO ${tableName} (${fields.join(',')}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${updateClause}`,
+          `INSERT INTO ${tableName} (\`${fields.join('`,`')}\`) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${updateClause}`,
           values
         );
         res.json({ success: true });
-      } catch (e: any) {
+      } catch (e) {
         console.error(`Error saving to ${entity}:`, e);
         res.status(500).json({ error: e.message });
       }
@@ -144,20 +137,19 @@ async function startServer() {
       try {
         await pool.query(`DELETE FROM ${tableName} WHERE id = ?`, [req.params.id]);
         res.json({ success: true });
-      } catch (e: any) {
+      } catch (e) {
         res.status(500).json({ error: e.message });
       }
     });
   });
 
-  // Settings
   app.get('/api/settings', async (req, res) => {
     try {
-      const [rows]: any = await pool.query('SELECT * FROM settings');
-      const settings: Record<string, any> = {};
-      rows.forEach((row: any) => settings[row.id] = JSON.parse(row.value));
+      const [rows] = await pool.query('SELECT * FROM settings');
+      const settings = {};
+      rows.forEach((row) => settings[row.id] = JSON.parse(row.value));
       res.json(settings);
-    } catch (e: any) {
+    } catch (e) {
       res.status(500).json({ error: e.message });
     }
   });
@@ -171,18 +163,17 @@ async function startServer() {
         [id, jsonValue]
       );
       res.json({ success: true });
-    } catch (e: any) {
+    } catch (e) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  // Schedule persistence
   app.get('/api/schedule/latest', async (req, res) => {
     try {
-      const [rows]: any = await pool.query('SELECT * FROM schedules ORDER BY updated_at DESC LIMIT 1');
+      const [rows] = await pool.query('SELECT * FROM schedules ORDER BY updated_at DESC LIMIT 1');
       const data = rows[0];
       res.json(data ? JSON.parse(data.data) : null);
-    } catch (e: any) {
+    } catch (e) {
       res.status(500).json({ error: e.message });
     }
   });
@@ -194,25 +185,17 @@ async function startServer() {
         JSON.stringify(req.body)
       ]);
       res.json({ success: true });
-    } catch (e: any) {
+    } catch (e) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  // Vite middleware for development
-  if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
-  }
+  // Serve static files from dist
+  const distPath = path.join(process.cwd(), 'dist');
+  app.use(express.static(distPath));
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(distPath, 'index.html'));
+  });
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
