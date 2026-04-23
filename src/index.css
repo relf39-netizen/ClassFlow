@@ -1,0 +1,43 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --color-brand-primary: #4f46e5; /* Indigo 600 */
+  --color-brand-accent: #f43f5e; /* Rose 500 */
+}
+
+@layer base {
+  body {
+    @apply bg-slate-50 text-slate-800;
+  }
+}
+
+@layer components {
+  .btn-action {
+    @apply px-5 py-2.5 rounded-full font-bold transition-all active:scale-95 flex items-center gap-2 shadow-lg;
+  }
+  .card-vibrant {
+    @apply bg-white rounded-[32px] shadow-xl shadow-slate-200/50 border border-slate-100;
+  }
+  .sidebar-item {
+    @apply flex items-center gap-3 p-3 rounded-xl transition-all font-medium;
+  }
+  .sidebar-active {
+    @apply bg-white/20 text-white shadow-sm;
+  }
+  .sidebar-hover {
+    @apply text-indigo-100 hover:bg-white/10;
+  }
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  .print-area {
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+}
+

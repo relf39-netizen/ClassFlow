@@ -1,0 +1,6 @@
+{
+  "name": "ClassFlow: AI-Powered School Scheduler",
+  "description": "An intelligent automated school scheduling system with conflict detection, teacher-subject mapping, and multi-view timetables.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
