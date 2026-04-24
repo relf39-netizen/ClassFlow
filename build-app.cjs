@@ -8,7 +8,7 @@ async function run() {
     await build({
       configFile: false, // Bypass discovery and bundling of vite.config.js
       root: process.cwd(),
-      base: './',
+      base: '/',
       plugins: [react()],
       define: {
         'process.env.GEMINI_API_KEY': JSON.stringify(process.env.GEMINI_API_KEY || ''),

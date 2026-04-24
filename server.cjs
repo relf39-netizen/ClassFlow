@@ -99,6 +99,18 @@ async function startServer() {
 
   await setupSchema();
 
+  // Debugging paths for IIS
+  const distPath = path.join(__dirname, 'dist');
+  console.log('--- Server Path Debug ---');
+  console.log('Current __dirname:', __dirname);
+  console.log('Target distPath:', distPath);
+  
+  // Middleware to log all requests
+  app.use((req, res, next) => {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+    next();
+  });
+
   // --- API Routes ---
   
   const entities = ['teachers', 'subjects', 'rooms', 'groups', 'assignments'];
