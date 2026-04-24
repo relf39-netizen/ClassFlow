@@ -175,58 +175,62 @@ async function startServer() {
 
   // --- Static File Serving ---
   const distPath = path.resolve(__dirname, 'dist');
-  const indexPath = path.join(distPath, 'index.html');
+  const indexPath = path.resolve(distPath, 'index.html');
   
-  console.log('--- Static Assets Path Debug ---');
+  console.log('--- Server Deployment Info ---');
+  console.log('CWD:', process.cwd());
   console.log('__dirname:', __dirname);
-  console.log('Resolved distPath:', distPath);
-  console.log('Expected indexPath:', indexPath);
+  console.log('Dist Path:', distPath);
+  console.log('Index Path:', indexPath);
 
-  // Debug: Check if dist exists and list files
   const fs = require('fs');
   if (fs.existsSync(distPath)) {
-    console.log('Dist folder found. Contents:', fs.readdirSync(distPath));
+    console.log('Directory "dist" exists. Files:', fs.readdirSync(distPath));
   } else {
-    console.error('CRITICAL ERROR: Dist folder NOT FOUND at', distPath);
+    console.error('CRITICAL: Directory "dist" NOT FOUND!');
   }
 
-  // Serve static assets from the dist folder
-  // We use a prefix-less static serving, but also a fallback for common asset types
+  // Handle static assets with explicit serving to ensure correct MIME types and paths
   app.use(express.static(distPath, {
-    maxAge: '1d',
-    etag: true
+    index: false,
+    maxAge: '1h'
   }));
 
   // API Health Route
-  app.get('/api/debug-paths', (req, res) => {
-    res.json({
-      dirname: __dirname,
-      distPath,
-      indexPath,
+  app.get('/api/health', (req, res) => {
+    res.json({ 
+      status: 'ok', 
+      db: !!pool, 
       distExists: fs.existsSync(distPath),
-      distFiles: fs.existsSync(distPath) ? fs.readdirSync(distPath) : []
+      indexExists: fs.existsSync(indexPath)
     });
   });
 
-  // Catch-all for SPA: Always serve index.html
+  // Root and SPA Fallback
   app.get('*', (req, res) => {
-    // If asset request reached here, it failed to be served by express.static
+    // If an asset was requested but missed by express.static, return 404 instead of index.html
     if (req.url.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|otf)$/)) {
-       console.warn(`[404] Asset not found in dist: ${req.url}`);
+       console.warn(`[404] Missing asset: ${req.url}`);
        return res.status(404).send('Asset not found');
     }
 
-    res.sendFile(indexPath, (err) => {
-      if (err) {
-        console.error('CRITICAL: Could not send index.html');
-        console.error('Error details:', err.message);
-        res.status(500).send(`Application Error: Loading entry point failed. (Path: ${indexPath}). Error: ${err.message}`);
-      }
-    });
+    if (fs.existsSync(indexPath)) {
+      res.sendFile(indexPath, (err) => {
+        if (err) {
+          console.error('Error sending index.html:', err.message);
+          if (!res.headersSent) {
+            res.status(500).send('Load Failed');
+          }
+        }
+      });
+    } else {
+      console.error('CRITICAL: index.html missing at', indexPath);
+      res.status(500).send('Application Entry Point (index.html) is missing. Please check the dist folder.');
+    }
   });
 
   app.listen(PORT, () => {
-    console.log(`Server process ${process.pid} listening on ${PORT}`);
+    console.log(`Server listening on PORT: ${PORT}`);
   });
 }
 
