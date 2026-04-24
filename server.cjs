@@ -174,7 +174,6 @@ async function startServer() {
   });
 
   // --- Static File Serving ---
-  // On Windows/IIS, sometimes __dirname is more reliable than process.cwd()
   const distPath = path.resolve(__dirname, 'dist');
   const indexPath = path.join(distPath, 'index.html');
   
@@ -183,22 +182,45 @@ async function startServer() {
   console.log('Resolved distPath:', distPath);
   console.log('Expected indexPath:', indexPath);
 
-  // Serve static assets from the dist folder
-  app.use(express.static(distPath));
+  // Debug: Check if dist exists and list files
+  const fs = require('fs');
+  if (fs.existsSync(distPath)) {
+    console.log('Dist folder found. Contents:', fs.readdirSync(distPath));
+  } else {
+    console.error('CRITICAL ERROR: Dist folder NOT FOUND at', distPath);
+  }
 
-  // Catch-all for SPA: Always serve index.html for any unknown route
+  // Serve static assets from the dist folder
+  // We use a prefix-less static serving, but also a fallback for common asset types
+  app.use(express.static(distPath, {
+    maxAge: '1d',
+    etag: true
+  }));
+
+  // API Health Route
+  app.get('/api/debug-paths', (req, res) => {
+    res.json({
+      dirname: __dirname,
+      distPath,
+      indexPath,
+      distExists: fs.existsSync(distPath),
+      distFiles: fs.existsSync(distPath) ? fs.readdirSync(distPath) : []
+    });
+  });
+
+  // Catch-all for SPA: Always serve index.html
   app.get('*', (req, res) => {
-    // If the request looks like a file but reached here, it means static middleware missed it
-    if (req.url.includes('.')) {
-       console.warn(`[404] Resource not found: ${req.url}`);
-       return res.status(404).send('Not found');
+    // If asset request reached here, it failed to be served by express.static
+    if (req.url.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|otf)$/)) {
+       console.warn(`[404] Asset not found in dist: ${req.url}`);
+       return res.status(404).send('Asset not found');
     }
 
     res.sendFile(indexPath, (err) => {
       if (err) {
         console.error('CRITICAL: Could not send index.html');
         console.error('Error details:', err.message);
-        res.status(500).send(`Application Error: Loading entry point failed. (Path: ${indexPath})`);
+        res.status(500).send(`Application Error: Loading entry point failed. (Path: ${indexPath}). Error: ${err.message}`);
       }
     });
   });
