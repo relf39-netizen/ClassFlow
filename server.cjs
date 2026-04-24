@@ -205,13 +205,26 @@ async function startServer() {
   // Serve static files from dist
   const distPath = path.join(__dirname, 'dist');
   app.use(express.static(distPath));
+  
+  // Specific catch for the index files if they are in root of dist due to flattening
+  app.get('/index-*.js', (req, res) => {
+    res.sendFile(path.join(distPath, req.url.split('/').pop()));
+  });
+  app.get('/index-*.css', (req, res) => {
+    res.sendFile(path.join(distPath, req.url.split('/').pop()));
+  });
+
   app.get('*', (req, res) => {
     res.sendFile(path.join(distPath, 'index.html'));
   });
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  // Listen on the port/pipe provided by IIS/iisnode
+  app.listen(PORT, () => {
+    console.log(`Server running on ${PORT}`);
   });
 }
 
-startServer();
+// Start with global error handling
+startServer().catch(err => {
+  console.error('FATAL STARTUP ERROR:', err);
+});
