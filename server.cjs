@@ -174,22 +174,31 @@ async function startServer() {
   });
 
   // --- Static File Serving ---
-  const distPath = path.join(__dirname, 'dist');
-  console.log('Serving static files from:', distPath);
+  // On Windows/IIS, sometimes __dirname is more reliable than process.cwd()
+  const distPath = path.resolve(__dirname, 'dist');
+  const indexPath = path.join(distPath, 'index.html');
+  
+  console.log('--- Static Assets Path Debug ---');
+  console.log('__dirname:', __dirname);
+  console.log('Resolved distPath:', distPath);
+  console.log('Expected indexPath:', indexPath);
 
-  // Serve static assets first
-  app.use(express.static(distPath, {
-    index: false, // Don't serve index.html via static, handle it via catch-all
-    fallthrough: true
-  }));
+  // Serve static assets from the dist folder
+  app.use(express.static(distPath));
 
-  // Catch-all for SPA
+  // Catch-all for SPA: Always serve index.html for any unknown route
   app.get('*', (req, res) => {
-    const indexPath = path.join(distPath, 'index.html');
+    // If the request looks like a file but reached here, it means static middleware missed it
+    if (req.url.includes('.')) {
+       console.warn(`[404] Resource not found: ${req.url}`);
+       return res.status(404).send('Not found');
+    }
+
     res.sendFile(indexPath, (err) => {
       if (err) {
-        console.error('Error sending index.html:', err.message);
-        res.status(500).send('Application Error: Could not load entry point.');
+        console.error('CRITICAL: Could not send index.html');
+        console.error('Error details:', err.message);
+        res.status(500).send(`Application Error: Loading entry point failed. (Path: ${indexPath})`);
       }
     });
   });
