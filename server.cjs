@@ -32,12 +32,13 @@ async function startServer() {
     console.error('Failed to create MySQL Pool:', err);
   }
 
-  // Database Schema Setup
+  // --- Database Setup (Non-blocking) ---
   const setupSchema = async () => {
     if (!pool) return;
     try {
+      console.log('Attempting to connect to database...');
       await pool.query('SELECT 1');
-      console.log('Connected to MySQL successfully');
+      console.log('Database connected successfully.');
 
       await pool.query(`CREATE TABLE IF NOT EXISTS settings (id VARCHAR(255) PRIMARY KEY, value TEXT)`);
       await pool.query(`CREATE TABLE IF NOT EXISTS teachers (id VARCHAR(255) PRIMARY KEY, name VARCHAR(255) NOT NULL, color VARCHAR(50))`);
@@ -59,29 +60,32 @@ async function startServer() {
         FOREIGN KEY(backup_room_id) REFERENCES rooms(id)
       )`);
       await pool.query(`CREATE TABLE IF NOT EXISTS schedules (id VARCHAR(255) PRIMARY KEY, data LONGTEXT NOT NULL, updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
-      console.log('Database schema verified');
+      console.log('Database schema verified.');
     } catch (err) {
-      console.error('Database connection or schema error:', err.message);
+      console.error('Database connection/schema error:', err.message);
     }
   };
 
-  // Run schema setup background
   setupSchema();
 
-  // Middleware to log all requests
+  // --- Middleware ---
   app.use((req, res, next) => {
     console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
     next();
   });
 
-  // API Routes
+  // --- API Routes ---
+  app.get('/api/health', (req, res) => {
+    res.json({ status: 'ok', time: new Date().toISOString(), db: !!pool });
+  });
+
   const entities = ['teachers', 'subjects', 'rooms', 'groups', 'assignments'];
   entities.forEach(entity => {
     const tableName = entity === 'groups' ? 'groups_table' : entity;
 
     app.get(`/api/${entity}`, async (req, res) => {
       try {
-        if (!pool) throw new Error('Database not connected');
+        if (!pool) return res.status(503).json({ error: 'Database not initialized' });
         const [rows] = await pool.query(`SELECT * FROM ${tableName}`);
         res.json(rows);
       } catch (e) {
@@ -91,11 +95,14 @@ async function startServer() {
 
     app.post(`/api/${entity}`, async (req, res) => {
       try {
-        if (!pool) throw new Error('Database not connected');
+        if (!pool) return res.status(503).json({ error: 'Database not initialized' });
         const fields = Object.keys(req.body);
+        if (fields.length === 0) return res.status(400).json({ error: 'Empty payload' });
+        
         const placeholders = fields.map(() => '?').join(',');
         const values = Object.values(req.body);
         const updateClause = fields.map(field => `\`${field}\` = VALUES(\`${field}\`)`).join(',');
+        
         await pool.query(
           `INSERT INTO ${tableName} (\`${fields.join('`,`')}\`) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${updateClause}`,
           values
@@ -108,7 +115,7 @@ async function startServer() {
 
     app.delete(`/api/${entity}/:id`, async (req, res) => {
       try {
-        if (!pool) throw new Error('Database not connected');
+        if (!pool) return res.status(503).json({ error: 'Database not initialized' });
         await pool.query(`DELETE FROM ${tableName} WHERE id = ?`, [req.params.id]);
         res.json({ success: true });
       } catch (e) {
@@ -119,10 +126,12 @@ async function startServer() {
 
   app.get('/api/settings', async (req, res) => {
     try {
-      if (!pool) throw new Error('Database not connected');
+      if (!pool) return res.status(503).json({ error: 'Database not initialized' });
       const [rows] = await pool.query('SELECT * FROM settings');
       const settings = {};
-      rows.forEach((row) => settings[row.id] = JSON.parse(row.value));
+      rows.forEach((row) => {
+        try { settings[row.id] = JSON.parse(row.value); } catch(e) { settings[row.id] = row.value; }
+      });
       res.json(settings);
     } catch (e) {
       res.status(500).json({ error: e.message });
@@ -131,7 +140,7 @@ async function startServer() {
 
   app.post('/api/settings', async (req, res) => {
     try {
-      if (!pool) throw new Error('Database not connected');
+      if (!pool) return res.status(503).json({ error: 'Database not initialized' });
       const { id, value } = req.body;
       const jsonValue = JSON.stringify(value);
       await pool.query(
@@ -146,7 +155,7 @@ async function startServer() {
 
   app.get('/api/schedule/latest', async (req, res) => {
     try {
-      if (!pool) throw new Error('Database not connected');
+      if (!pool) return res.status(503).json({ error: 'Database not initialized' });
       const [rows] = await pool.query('SELECT * FROM schedules ORDER BY updated_at DESC LIMIT 1');
       res.json(rows[0] ? JSON.parse(rows[0].data) : null);
     } catch (e) {
@@ -156,7 +165,7 @@ async function startServer() {
 
   app.post('/api/schedule', async (req, res) => {
     try {
-      if (!pool) throw new Error('Database not connected');
+      if (!pool) return res.status(503).json({ error: 'Database not initialized' });
       await pool.query('INSERT INTO schedules (id, data) VALUES (?, ?)', [Date.now().toString(), JSON.stringify(req.body)]);
       res.json({ success: true });
     } catch (e) {
@@ -164,17 +173,38 @@ async function startServer() {
     }
   });
 
-  // Static serving
+  // --- Static File Serving ---
   const distPath = path.join(__dirname, 'dist');
-  app.use(express.static(distPath, { redirect: false }));
+  console.log('Serving static files from:', distPath);
 
+  // Serve static assets first
+  app.use(express.static(distPath, {
+    index: false, // Don't serve index.html via static, handle it via catch-all
+    fallthrough: true
+  }));
+
+  // Catch-all for SPA
   app.get('*', (req, res) => {
-    res.sendFile(path.join(distPath, 'index.html'));
+    const indexPath = path.join(distPath, 'index.html');
+    res.sendFile(indexPath, (err) => {
+      if (err) {
+        console.error('Error sending index.html:', err.message);
+        res.status(500).send('Application Error: Could not load entry point.');
+      }
+    });
   });
 
   app.listen(PORT, () => {
-    console.log(`Server listening on ${PORT}`);
+    console.log(`Server process ${process.pid} listening on ${PORT}`);
   });
 }
 
-startServer();
+// Global Exception Handler
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+});
+
+startServer().catch(err => {
+  console.error('Failed to start server:', err);
+});
+
